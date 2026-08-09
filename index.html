@@ -3352,6 +3352,285 @@ img.tv-ch-logo, img.modal-tv-ch-logo, img.card-poster{
   console.log('[BrTv v35] isMobile expandido + dock keeper ativo');
 })();
 </script>
+
+<script id="brtv-v36-proxy-js">
+(function(){
+  /* ============================================================
+     v36 · Proxy HTTPS transparente
+     Todo http:// que sair do player passa por:
+       https://<PROXY>/http://destino
+     Config guardada em localStorage.brtv_proxy_url
+     ============================================================ */
+  var DEFAULT_PROXY = 'https://brtv-proxy.brunobrithyz.workers.dev';
+  var PROXY_KEY     = 'brtv_proxy_url';
+  var ENABLED_KEY   = 'brtv_proxy_enabled';
+
+  function getProxy(){
+    try{
+      var v = localStorage.getItem(PROXY_KEY);
+      if(v === null){
+        // primeiro acesso -> grava default
+        localStorage.setItem(PROXY_KEY, DEFAULT_PROXY);
+        return DEFAULT_PROXY;
+      }
+      return v || DEFAULT_PROXY;
+    }catch(e){ return DEFAULT_PROXY; }
+  }
+  function isEnabled(){
+    try{
+      var v = localStorage.getItem(ENABLED_KEY);
+      if(v === null){
+        localStorage.setItem(ENABLED_KEY, '1');
+        return true;
+      }
+      return v === '1';
+    }catch(e){ return true; }
+  }
+  function setProxy(u){
+    try{ localStorage.setItem(PROXY_KEY, (u||'').replace(/\/+$/,'')); }catch(e){}
+  }
+  function setEnabled(b){
+    try{ localStorage.setItem(ENABLED_KEY, b ? '1' : '0'); }catch(e){}
+  }
+
+  /* URL do proxy sem barra final */
+  function proxyBase(){
+    var u = getProxy().replace(/\/+$/,'');
+    return u;
+  }
+
+  /* Verdadeiro se deve reescrever essa URL */
+  function shouldProxy(url){
+    if(!isEnabled()) return false;
+    if(typeof url !== 'string') return false;
+    if(!/^http:\/\//i.test(url)) return false;   // so http (nao https, nao ws)
+    // nao reescreve se ja passa pelo proxy
+    var p = proxyBase();
+    if(url.indexOf(p) === 0) return false;
+    // nao reescreve loopback/local
+    if(/^http:\/\/(localhost|127\.0\.0\.1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/i.test(url)) return false;
+    return true;
+  }
+
+  function toProxied(url){
+    if(!shouldProxy(url)) return url;
+    return proxyBase() + '/' + url;
+  }
+  window.brtvV36 = {
+    getProxy: getProxy, setProxy: setProxy,
+    isEnabled: isEnabled, setEnabled: setEnabled,
+    toProxied: toProxied, shouldProxy: shouldProxy,
+    DEFAULT: DEFAULT_PROXY
+  };
+
+  /* ============================================================
+     Hook 1) fetch()
+     ============================================================ */
+  var _origFetch = window.fetch;
+  window.fetch = function(input, init){
+    try{
+      if(typeof input === 'string' && shouldProxy(input)){
+        input = toProxied(input);
+      } else if(input && typeof input === 'object' && input.url && shouldProxy(input.url)){
+        input = new Request(toProxied(input.url), input);
+      }
+    }catch(e){}
+    return _origFetch.call(this, input, init);
+  };
+
+  /* ============================================================
+     Hook 2) XMLHttpRequest.open  (cobre HLS.js, DASH, mpegts)
+     ============================================================ */
+  var _origOpen = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function(method, url){
+    try{
+      if(typeof url === 'string' && shouldProxy(url)){
+        arguments[1] = toProxied(url);
+      }
+    }catch(e){}
+    return _origOpen.apply(this, arguments);
+  };
+
+  /* ============================================================
+     Hook 3) <img>, <video>, <source> src setter
+     Cobre logos e streams diretos setados via v.src = ...
+     ============================================================ */
+  function hookSrcSetter(tagName, propName){
+    try{
+      var proto = document.createElement(tagName).constructor.prototype;
+      var desc = Object.getOwnPropertyDescriptor(proto, propName) ||
+                 Object.getOwnPropertyDescriptor(HTMLElement.prototype, propName);
+      if(!desc || !desc.set) return;
+      var _origSet = desc.set;
+      var _origGet = desc.get;
+      Object.defineProperty(proto, propName, {
+        configurable: true,
+        enumerable: true,
+        get: function(){ return _origGet.call(this); },
+        set: function(v){
+          try{
+            if(typeof v === 'string' && shouldProxy(v)){
+              v = toProxied(v);
+            }
+          }catch(e){}
+          return _origSet.call(this, v);
+        }
+      });
+    }catch(e){}
+  }
+  hookSrcSetter('img',    'src');
+  hookSrcSetter('video',  'src');
+  hookSrcSetter('audio',  'src');
+  hookSrcSetter('source', 'src');
+  hookSrcSetter('iframe', 'src');
+
+  /* Cobre img.setAttribute('src', ...) e video.setAttribute('src', ...) */
+  var _origSetAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function(name, value){
+    try{
+      if(name === 'src' && typeof value === 'string' && shouldProxy(value)){
+        value = toProxied(value);
+        arguments[1] = value;
+      }
+    }catch(e){}
+    return _origSetAttribute.apply(this, arguments);
+  };
+
+  console.log('[BrTv v36] proxy hook ativo  proxy=', proxyBase(), ' enabled=', isEnabled());
+})();
+</script>
+
+<style id="brtv-v36-css">
+/* Painel de configuracao do proxy */
+.brtv-v36-proxy-box{
+  margin-top:14px;
+  padding:12px 14px;
+  background:rgba(0,230,118,.06);
+  border:1px solid rgba(0,230,118,.25);
+  border-radius:12px;
+  font-family:Inter,system-ui,sans-serif;
+}
+.brtv-v36-proxy-box .head{
+  display:flex;align-items:center;gap:8px;
+  font-size:12px;font-weight:800;letter-spacing:.5px;
+  color:#00e676;margin-bottom:8px;text-transform:uppercase;
+}
+.brtv-v36-proxy-box .head .badge{
+  background:#00e676;color:#06101c;padding:2px 6px;border-radius:4px;
+  font-size:9px;font-weight:900;
+}
+.brtv-v36-proxy-box label.sw{
+  display:flex;align-items:center;gap:8px;margin-bottom:8px;
+  font-size:12px;color:#c8d4e6;cursor:pointer;
+}
+.brtv-v36-proxy-box input[type="checkbox"]{
+  width:16px;height:16px;accent-color:#00e676;
+}
+.brtv-v36-proxy-box input[type="url"]{
+  width:100%;box-sizing:border-box;
+  background:rgba(0,0,0,.35);color:#fff;
+  border:1px solid rgba(255,255,255,.10);border-radius:8px;
+  padding:8px 10px;font-size:12px;font-family:JetBrains Mono,monospace;
+  margin-bottom:6px;
+}
+.brtv-v36-proxy-box .hint{
+  font-size:10.5px;color:#8ea3c7;line-height:1.5;
+}
+.brtv-v36-proxy-box .actions{
+  display:flex;gap:6px;margin-top:8px;
+}
+.brtv-v36-proxy-box button{
+  flex:1;padding:7px 10px;border-radius:8px;border:0;
+  background:rgba(255,255,255,.08);color:#e8f4ff;
+  font-weight:700;font-size:11px;cursor:pointer;
+}
+.brtv-v36-proxy-box button.save{
+  background:linear-gradient(135deg,#00e676,#00b0ff);color:#06101c;
+}
+.brtv-v36-proxy-box button:hover{ filter:brightness(1.15); }
+:root[data-theme="light"] .brtv-v36-proxy-box{
+  background:rgba(0,180,90,.08);border-color:rgba(0,180,90,.35);
+}
+:root[data-theme="light"] .brtv-v36-proxy-box input[type="url"]{
+  background:rgba(255,255,255,.9);color:#0e1524;
+  border-color:rgba(0,0,0,.10);
+}
+:root[data-theme="light"] .brtv-v36-proxy-box .hint{ color:#5a6a85; }
+</style>
+
+<script id="brtv-v36-ui-js">
+(function(){
+  function ensurePanel(){
+    if(document.getElementById('brtvV36ProxyBox')) return;
+    // procura o card de configuracao
+    var host = document.getElementById('cfgShortcuts');
+    if(!host) host = document.querySelector('.cfg-clear');
+    if(!host) return;
+    var parent = host.parentElement;
+    if(!parent) return;
+
+    var box = document.createElement('div');
+    box.id = 'brtvV36ProxyBox';
+    box.className = 'brtv-v36-proxy-box';
+    box.innerHTML =
+      '<div class="head">' +
+        '<span class="badge">v36</span>' +
+        'Proxy HTTPS (contorna Mixed Content)' +
+      '</div>' +
+      '<label class="sw">' +
+        '<input type="checkbox" id="brtvV36ProxyEnabled">' +
+        'Ativar proxy para URLs http://' +
+      '</label>' +
+      '<input type="url" id="brtvV36ProxyUrl" placeholder="https://seu-proxy.workers.dev">' +
+      '<div class="hint">' +
+        'Cole aqui a URL do seu Cloudflare Worker (sem barra no final).<br>' +
+        'Quando ativo, qualquer http://freevis.lat:8880/... vira ' +
+        'https://proxy/http://freevis.lat:8880/... automaticamente.' +
+      '</div>' +
+      '<div class="actions">' +
+        '<button type="button" id="brtvV36ProxyRestore">Restaurar padrao</button>' +
+        '<button type="button" class="save" id="brtvV36ProxySave">Salvar</button>' +
+      '</div>';
+    // insere antes de cfgShortcuts (ou onde couber)
+    parent.insertBefore(box, host);
+
+    var inpUrl = box.querySelector('#brtvV36ProxyUrl');
+    var inpEn  = box.querySelector('#brtvV36ProxyEnabled');
+    var btnSv  = box.querySelector('#brtvV36ProxySave');
+    var btnRs  = box.querySelector('#brtvV36ProxyRestore');
+
+    function refresh(){
+      inpUrl.value = window.brtvV36.getProxy();
+      inpEn.checked = window.brtvV36.isEnabled();
+    }
+    refresh();
+
+    btnSv.onclick = function(){
+      window.brtvV36.setProxy(inpUrl.value.trim());
+      window.brtvV36.setEnabled(inpEn.checked);
+      btnSv.textContent = 'Salvo ✓';
+      setTimeout(function(){ btnSv.textContent = 'Salvar'; }, 1500);
+    };
+    btnRs.onclick = function(){
+      window.brtvV36.setProxy(window.brtvV36.DEFAULT);
+      window.brtvV36.setEnabled(true);
+      refresh();
+    };
+    inpEn.onchange = function(){
+      window.brtvV36.setEnabled(inpEn.checked);
+    };
+  }
+  if(document.readyState !== 'loading') ensurePanel();
+  else document.addEventListener('DOMContentLoaded', ensurePanel);
+  // reforca caso o painel ainda nao exista no boot
+  var tries = 0;
+  var iv = setInterval(function(){
+    ensurePanel();
+    if(document.getElementById('brtvV36ProxyBox') || ++tries > 40) clearInterval(iv);
+  }, 250);
+  window.brtvV36EnsurePanel = ensurePanel;
+})();
+</script>
 </head>
 <body>
 
