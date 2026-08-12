@@ -3414,7 +3414,9 @@ img.tv-ch-logo, img.modal-tv-ch-logo, img.card-poster{
 
   function toProxied(url){
     if(!shouldProxy(url)) return url;
-    return proxyBase() + '/' + url;
+    // v37: Deno Deploy rejeita '/http://...' com 404 na roteadora
+    // -> usa ?u=<encoded> que sempre passa
+    return proxyBase() + '/?u=' + encodeURIComponent(url);
   }
   window.brtvV36 = {
     getProxy: getProxy, setProxy: setProxy,
@@ -3629,6 +3631,18 @@ img.tv-ch-logo, img.modal-tv-ch-logo, img.card-poster{
     if(document.getElementById('brtvV36ProxyBox') || ++tries > 40) clearInterval(iv);
   }, 250);
   window.brtvV36EnsurePanel = ensurePanel;
+})();
+</script>
+
+<script id="brtv-v37-js">
+(function(){
+  // sinaliza que a nova reescrita esta ativa
+  try{
+    if(window.brtvV36 && typeof window.brtvV36.toProxied === 'function'){
+      var t = window.brtvV36.toProxied('http://example.com/path?a=1&b=2');
+      console.log('[BrTv v37] proxy reescrita OK ->', t);
+    }
+  }catch(e){}
 })();
 </script>
 </head>
